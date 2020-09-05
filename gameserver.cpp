@@ -2,21 +2,65 @@
 
 GameServer::GameServer(QObject *parent) : QObject(parent)
 {
-//    QJsonObject root, server;
-//    QJsonDocument doc;
-//    QFile file("config.json");
-//    doc.fromJson(file.readAll());
-//    doc.fromJson("{ \"server\":{ \"IP\" : \"127.0.0.1\", \"port\" : 12345, \"notice\" : \"null\" } }");
-//    root = doc.object();
-//    server = root["server"].toObject();
-//    this->notice = server["notice"].toString();
-//    if(listener.listen(QHostAddress(server["IP"].toString()), server["port"].toInt()))
-//        cout << "Server is LISTENING..." << endl;
-    if(listener.listen(QHostAddress("127.0.0.1"), 12345))
-        cout << "Server is LISTENING..." << endl;
+    log.start();
+    db.init(std::bind(&LogThread::printLog, &log, logType::database, std::placeholders::_1));
+
+    QFile config("config.json");
+    if(!config.open(QIODevice::ReadOnly))
+    {
+        log.printLog(logType::socket, "config.json open failed. Is it existed?");
+        return;
+    }
+
+    QJsonObject root, server;
+    QJsonDocument doc = QJsonDocument::fromJson(config.readAll());
+
+    config.close();
+
+    server = doc.object()["server"].toObject();
+    this->notice = server["notice"].toString();
+    QString IP = server["IP"].toString();
+    unsigned int port = server["port"].toInt();
+    unsigned int maxThreadCount = server["maxThreadCount"].toInt();
+
+    if(listener.listen(QHostAddress(IP), port))
+        log.printLog(logType::socket, "Server is LISTENING on " + QString("%1:%2").arg(IP).arg(port) + "...");
+
     connect(&listener, &QTcpServer::newConnection, this, &GameServer::onNewConnection);
-    this->notice = "test!!!";
+    qRegisterMetaType<Msg>("Msg");
+    qRegisterMetaType<msgType>("msgType");
+    connect(this, &GameServer::sendSignal, this, &GameServer::onSendSignal);
+
+    pool.setMaxThreadCount(maxThreadCount);
+    log.printLog(logType::threadpool, QString("Threadpool initialization has finished, maximum thread Count = %1").arg(maxThreadCount));
+
+    log.printLog(logType::socket, QString("Server V%1 start successfully.").arg(VERSION));
 }
+
+void GameServer::onNewConnection()
+{
+    QTcpSocket *p = listener.nextPendingConnection();
+
+    log.printLog(logType::socket, "Get A New Connection:" + p->peerAddress().toString());
+
+    {
+        QMutexLocker locker(&this->mutex);
+        onlineList[p] = "";
+    }
+    connect(p, &QTcpSocket::readyRead, this, &GameServer::onReadyRead);
+    connect(p, &QTcpSocket::disconnected, this, &GameServer::onDisconnected);
+    emit sendSignal(p, connectSuccess, this->notice);
+}
+
+void GameServer::onDisconnected()
+{
+    log.printLog(logType::socket, "A Connector has disconnected.");
+    {
+        QMutexLocker locker(&this->mutex);
+        onlineList.remove((QTcpSocket *)sender());
+    }
+}
+
 
 void GameServer::onReadyRead()
 {
@@ -26,24 +70,10 @@ void GameServer::onReadyRead()
     msgHandler(msg, clientSocket);
 }
 
-void GameServer::onDisconnected()
+void GameServer::onSendSignal(QTcpSocket *socket, msgType type, QString content)
 {
-    cout << "A Connector has disconnected" << endl;
-    onlineList.remove((QTcpSocket *)sender());
-}
-
-void GameServer::onNewConnection()
-{
-    QTcpSocket *p = listener.nextPendingConnection();
-
-    cout << "Get A New Connection..." << endl;
-    cout << p->peerAddress().toString().toUtf8().data() << endl;
-
-    onlineList[p] = "";
-    connect(p, &QTcpSocket::readyRead, this, &GameServer::onReadyRead);
-    connect(p, &QTcpSocket::disconnected, this, &GameServer::onDisconnected);
-    Msg msg(connectSuccess, this->notice);
-    sendToClient(msg, p);
+    Msg msg(type, content);
+    sendToClient(msg, socket);
 }
 
 void GameServer::sendToClient(Msg &msg, QTcpSocket *socket)
@@ -51,12 +81,12 @@ void GameServer::sendToClient(Msg &msg, QTcpSocket *socket)
     QString data = msg.packUp();
     socket->write(data.toUtf8().data(), data.size());
 
-#if DEBUGMODE == true
-    cout << "Send A New Msg..." << endl;
-    cout << "type:" << msg.type << endl;
-    cout << "content:" << msg.content.toUtf8().data() << endl;
-#endif
-
+    if(this->debugMode == true)
+    {
+        log.printLog(logType::socket, "Send A New Msg.");
+        log.printLog(logType::socket, "type:" + QString("%1").arg((int)msg.type));
+        log.printLog(logType::socket, "content:" + msg.content);
+    }
 }
 
 void GameServer::receiveFromClient(Msg &msg, QTcpSocket *socket)
@@ -64,57 +94,72 @@ void GameServer::receiveFromClient(Msg &msg, QTcpSocket *socket)
     QString data = socket->readAll();
     msg.unpack(data.toUtf8().data());
 
-#if DEBUGMODE == true
-    cout << "Get A New Msg..." << endl;
-    cout << "type:" << msg.type << endl;
-    cout << "content:" << msg.content.toUtf8().data() << endl;
-#endif
-
+    if(this->debugMode == true)
+    {
+        log.printLog(logType::socket, "Get A New Msg.");
+        log.printLog(logType::socket, "type:" + QString("%1").arg((int)msg.type));
+        log.printLog(logType::socket, "content:" + msg.content);
+    }
 }
 
 void GameServer::msgHandler(Msg &msg, QTcpSocket *sender)
 {
-    switch((int)msg.type)
-    {
-    case msgType::matchQuery:
-    {
-        if(matchingQueue.isEmpty())
-            matchingQueue.push_back(onlineList[sender]);
-        else
-            return;
-        /*待定*/
-        break;
-    }
-    case msgType::userName:
-    {
-        onlineList[sender] = msg.content;
-        cout << "A user has connected." << endl;
-        break;
-    }
-    case msgType::uploadScore:
-    {
-        cout << "A user has sent score : " << msg.content.toUtf8().data() << endl;
-        QJsonObject obj = QJsonDocument::fromJson(msg.content.toUtf8()).object();
-        db.insertScore(onlineList[sender], obj["score"].toInt(), obj["maxNum"].toInt());
-        break;
-    }
-    case msgType::personalAchievementQuery:
-    {
-        cout << "A user is querying personal achievement. " << endl;
-        QJsonDocument doc;
-        doc.setArray(QJsonArray::fromVariantList(db.queryScore(onlineList[sender])));
-        Msg msg(msgType::personalAchievement, doc.toJson());
-        sendToClient(msg, sender);
-        break;
-    }
-    case msgType::allAchievementQuery:
-    {
-        cout << "A user is querying all achievement. " << endl;
-        QJsonDocument doc;
-        doc.setArray(QJsonArray::fromVariantList(db.queryScore()));
-        Msg msg(msgType::allAchievement, doc.toJson());
-        sendToClient(msg, sender);
-        break;
-    }
-    }
+    Task *task = new Task([=](){
+        switch((int)msg.type)
+        {
+        case msgType::matchQuery:
+        {
+            QMutexLocker lock(&this->mutex);
+            if(matchingQueue.isEmpty())
+                matchingQueue.push_back(onlineList[sender]);
+            else
+                return;
+            /*待定*/
+            break;
+        }
+        case msgType::userName:
+        {
+            QMutexLocker lock(&this->mutex);
+            onlineList[sender] = msg.content;
+            log.printLog(logType::socket, "A user has connected.");
+            break;
+        }
+        case msgType::uploadScore:
+        {
+            QString senderName;
+            {
+                QMutexLocker lock(&this->mutex);
+                senderName = onlineList[sender];
+            }
+            log.printLog(logType::socket, "A user has sent score.");
+            QJsonObject obj = QJsonDocument::fromJson(msg.content.toUtf8()).object();
+            db.insertScore(senderName, obj["score"].toInt(), obj["maxNum"].toInt());
+            break;
+        }
+        case msgType::personalAchievementQuery:
+        {
+            QString senderName;
+            {
+                QMutexLocker lock(&this->mutex);
+                senderName = onlineList[sender];
+            }
+            log.printLog(logType::socket, "A user is querying personal achievement. ");
+            QJsonDocument doc;
+            doc.setArray(QJsonArray::fromVariantList(db.queryScore(senderName)));
+            emit sendSignal(sender, msgType::personalAchievement, doc.toJson());
+            break;
+        }
+        case msgType::allAchievementQuery:
+        {
+            log.printLog(logType::socket, "A user is querying all achievement. ");
+            QJsonDocument doc;
+            doc.setArray(QJsonArray::fromVariantList(db.queryScore()));
+            emit sendSignal(sender, msgType::allAchievement, doc.toJson());
+            break;
+        }
+        }
+    }, std::bind(&LogThread::printLog, &log, logType::threadpool, std::placeholders::_1));
+
+    pool.start(task);
+
 }

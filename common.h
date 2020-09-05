@@ -16,15 +16,43 @@
 #include <QSqlDatabase>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QRunnable>
+#include <QThreadPool>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QThread>
+#include <QEventLoop>
+#include <QDateTime>
 
 #include <iostream>
-#include <memory>
+#include <fstream>
 
 #define DEBUGMODE true
 
+#define VERSION "2.1"
+
 using namespace std;
 
-enum msgType{connectSuccess, userName, uploadScore, matchQuery, personalAchievementQuery, allAchievementQuery, matchSuccess, personalAchievement, allAchievement};
+enum msgType
+{
+    connectSuccess,
+    userName,
+    uploadScore,
+    matchQuery,
+    personalAchievementQuery,
+    allAchievementQuery,
+    matchSuccess,
+    personalAchievement,
+    allAchievement
+};
+
+enum logType
+{
+    socket,
+    database,
+    threadpool,
+    logThread
+};
 
 const QString _MsgHeader = "_MSGHEADER_";
 const QString _MsgEnd = "_MSGEND_";

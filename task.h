@@ -1,12 +1,22 @@
 #ifndef TASK_H
 #define TASK_H
 
+#include "common.h"
 
-class Task : public QObject
+class Task : public QRunnable
 {
-    Q_OBJECT
+    std::function<void()> _task;
+    std::function<void(QString content)> _log;
+
 public:
-    explicit Task(QObject *parent = nullptr);
+    Task(std::function<void()> task, std::function<void(QString content)> log);
+    ~Task();
+
+protected:
+    void run();
+
+
+protected:
 
 signals:
 

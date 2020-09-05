@@ -17,6 +17,7 @@ DEFINES += QT_DEPRECATED_WARNINGS
 SOURCES += \
         database.cpp \
         gameserver.cpp \
+        logthread.cpp \
         main.cpp \
         task.cpp
 
@@ -29,4 +30,5 @@ HEADERS += \
     common.h \
     database.h \
     gameserver.h \
+    logthread.h \
     task.h

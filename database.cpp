@@ -3,12 +3,6 @@
 Database::Database()
 {
     this->db = new QSqlDatabase;
-    *db = QSqlDatabase::addDatabase("QSQLITE");
-    db->setDatabaseName(QCoreApplication::applicationDirPath() + "/gamedata.dat");
-    if(!db->open())
-        cout << "QDatabase Error : " << db->lastError().text().toUtf8().data() << endl;
-    QSqlQuery query;
-    query.exec("CREATE TABLE IF NOT EXISTS tableScore (uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, uname VARCHAR NOT NULL DEFAULT ('_unknown_'), score INTEGER DEFAULT (0), maxNum INTEGER NOT NULL DEFAULT (0), uploadTime DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')));");
 }
 
 Database::~Database()
@@ -16,27 +10,35 @@ Database::~Database()
     delete this->db;
 }
 
+void Database::init(std::function<void(QString)> func)
+{
+    this->logPrinter = func;
+
+    *db = QSqlDatabase::addDatabase("QSQLITE");
+    db->setDatabaseName(QCoreApplication::applicationDirPath() + "/gamedata.dat");
+    if(!db->open())
+        logPrinter("QDatabase Error : " + db->lastError().text());
+    else
+        logPrinter("Database open success.");
+    queryExec("CREATE TABLE IF NOT EXISTS tableScore (uid INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, uname VARCHAR NOT NULL DEFAULT ('_unknown_'), score INTEGER DEFAULT (0), maxNum INTEGER NOT NULL DEFAULT (0), uploadTime DATETIME NOT NULL DEFAULT (datetime('now', 'localtime')));");
+    logPrinter("Database initialize finished.");
+}
+
 void Database::insertScore(QString name, int score, int maxNum)
 {
-    QSqlQuery query;
-    QString command = QString("INSERT INTO tableScore VALUES (null, '%1', %2, %3, null);").arg(name).arg(score).arg(maxNum);
-    if(!query.exec(command))
-        cout << "SQL query ERROR at " << command.toUtf8().data() << " : " << db->lastError().text().toUtf8().data() << endl;
+    queryExec(QString("INSERT INTO tableScore VALUES (null, '%1', %2, %3, datetime('now', 'localtime'));").arg(name).arg(score).arg(maxNum));
 }
 
 QVariantList Database::queryScore(QString name)
 {
-    QSqlQuery query;
     QString command;
     if(name.isEmpty())
         command = QString("SELECT uname, score, maxNum, uploadTime FROM tableScore ORDER BY score DESC LIMIT 0,10;");
     else
         command = QString("SELECT uname, score, maxNum, uploadTime FROM tableScore WHERE uname = '%1' ORDER BY score DESC;").arg(name);
-    if(!query.exec(command))
-    {
-        cout << "SQL query ERROR at " << command.toUtf8().data() << " : " << db->lastError().text().toUtf8().data() << endl;
-        return QVariantList();
-    }
+
+    QSqlQuery query = queryExec(command);
+
     if(query.size() == 0)
         return QVariantList();
 
@@ -53,4 +55,12 @@ QVariantList Database::queryScore(QString name)
         resultList.push_back(tmpObj);
     }
     return resultList;
+}
+
+QSqlQuery Database::queryExec(QString query)
+{
+    QSqlQuery sqlQuery;
+    if(!sqlQuery.exec(query))
+        logPrinter("SQL query ERROR at " + query + " : " + db->lastError().text());
+    return sqlQuery;
 }

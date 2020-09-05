@@ -1,0 +1,9 @@
+{
+    "server":{
+        "IP" : "127.0.0.1",
+        "port" : 12345,
+        "notice" : "null",
+        "maxThreadCount": 8
+    }
+}
+# 服务器初始化信息范例，请将上面文段复制到config.json中使用
